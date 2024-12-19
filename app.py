@@ -1,7 +1,7 @@
 from flask import Flask, jsonify, request, make_response, send_from_directory
 from flask_sqlalchemy import SQLAlchemy
 from flask_bcrypt import Bcrypt
-from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity, verify_jwt_in_request
+from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity, verify_jwt_in_request, decode_token
 from flask_migrate import Migrate
 import os
 from flask_cors import CORS, cross_origin  # Import Flask-CORS
@@ -15,7 +15,9 @@ from pytz import timezone
 import re
 from dotenv import load_dotenv
 app = Flask(__name__)
-CORS(app, supports_credentials=True)  # Allow all origins
+from flask_cors import CORS
+
+CORS(app, supports_credentials=True, resources={r"/*": {"origins": "http://localhost:5173"}})
 def token_required(f):
     def wrapper(*args, **kwargs):
         if request.path.startswith('/uploads'):
@@ -180,6 +182,7 @@ def allowed_file(filename):
 
 
 # Route: Upload a Photo to the Gallery
+# Route: Add a Photo URL to the Gallery
 @app.post('/api/gallery/upload')
 @jwt_required()
 def upload_photo():
@@ -188,42 +191,37 @@ def upload_photo():
     print(f"Current user ID: {current_user_id}")  # Debugging line
 
     """
-    Upload an image and add it to the gallery.
+    Accept an image URL and add it to the gallery.
     """
-    if 'file' not in request.files:
-        return jsonify({"error": "No file part in the request"}), 400
+    data = request.get_json()
 
-    file = request.files['file']
-    caption = request.form.get("caption", "")
-    category = request.form.get("category", "Uncategorized")
-    photo_type = request.form.get("photo_type", "").lower()
+    # Extract fields from the request body
+    image_url = data.get("image_url")
+    caption = data.get("caption", "")
+    category = data.get("category", "Uncategorized")
+    photo_type = data.get("photo_type", "").lower()
 
-    if file and allowed_file(file.filename):
-        filename = secure_filename(file.filename)
-        # Generate unique filename to avoid conflicts
-        unique_filename = f"{int(datetime.utcnow().timestamp())}_{filename}"
-        file_path = os.path.join(app.config["UPLOAD_FOLDER"], unique_filename)
+    # Validate photo type
+    try:
+        validate_photo_type(photo_type)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
 
+    # Validate that image_url is provided
+    if not image_url or not image_url.startswith(("http://", "https://")):
+        return jsonify({"error": "Invalid or missing image URL."}), 400
 
-        # Save file to the uploads folder
-        file.save(file_path)
+    # Add record to the database
+    new_photo = Gallery(
+        image_url=image_url,  # Use the provided URL
+        caption=caption,
+        category=category,
+        photo_type=photo_type
+    )
+    db.session.add(new_photo)
+    db.session.commit()
 
-        relative_path = os.path.join("uploads", unique_filename)
-
-        # Add record to the database
-        new_photo = Gallery(
-            image_url=relative_path,  # Store relative path
-            caption=caption,
-            category=category,
-            photo_type=photo_type
-
-        )
-        db.session.add(new_photo)
-        db.session.commit()
-
-        return jsonify({"message": "Photo uploaded successfully!", "photo": new_photo.to_dict()}), 201
-
-    return jsonify({"error": "Invalid file format. Allowed: png, jpg, jpeg, webp"}), 400
+    return jsonify({"message": "Photo added successfully!", "photo": new_photo.to_dict()}), 201
 
 
 # Route: Fetch All Gallery Photos
@@ -258,10 +256,6 @@ def delete_photo(photo_id):
     photo = Gallery.query.get(photo_id)
     if not photo:
         return jsonify({"error": "Photo not found"}), 404
-
-    # Remove the file from the file system
-    if os.path.exists(photo.image_url):
-        os.remove(photo.image_url)
 
     # Remove the record from the database
     db.session.delete(photo)
@@ -603,12 +597,11 @@ def delete_inquiry(inquiry_id):
 
 #-------------------------------------------------------------------------------
 
-@app.route('/forgot_password', methods=['POST', 'OPTIONS'])
+@app.route('/forgot_password', methods=['POST'])
 def forgot_password():
     data = request.get_json()
     username = data.get("username")
-    if request.method == 'OPTIONS':
-        return '', 204  # Preflight response
+
     # Validate user
     user = User.query.filter_by(username=username).first()
     if not user:
@@ -620,7 +613,89 @@ def forgot_password():
     # Send reset email
     reset_link = f"http://localhost:5173/reset-password?token={reset_token}"
     subject = "Password Reset Request"
-    body = f"Hello {user.username},\n\nClick the link below to reset your password:\n{reset_link}\n\nIf you did not request this, please ignore this email."
+    body = f"""
+    <html>
+    <head>
+        <style>
+            body {{
+                font-family: 'Arial', sans-serif;
+                background-color: #f4f4f9;
+                margin: 0;
+                padding: 0;
+                color: #333333;
+            }}
+            .container {{
+                max-width: 600px;
+                margin: 40px auto;
+                background-color: #ffffff;
+                border-radius: 10px;
+                box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+                overflow: hidden;
+            }}
+            .header {{
+                background: linear-gradient(to right, #4a90e2, #1453e4);
+                color: #ffffff;
+                text-align: center;
+                padding: 20px 0;
+            }}
+            .header h1 {{
+                margin: 0;
+                font-size: 24px;
+                font-weight: bold;
+            }}
+            .content {{
+                padding: 30px;
+                text-align: center;
+            }}
+            .content p {{
+                font-size: 16px;
+                line-height: 1.6;
+            }}
+            .reset-button {{
+                display: inline-block;
+                margin: 20px 0;
+                padding: 12px 24px;
+                background: #4a90e2;
+                color: #ffffff;
+                text-decoration: none;
+                font-weight: bold;
+                border-radius: 50px;
+                box-shadow: 0 4px 6px rgba(0, 0, 0, 0.2);
+                transition: background 0.3s ease;
+            }}
+            .reset-button:hover {{
+                background: #1453e4;
+            }}
+            .footer {{
+                background-color: #f4f4f9;
+                text-align: center;
+                font-size: 12px;
+                padding: 15px;
+                color: #666666;
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="header">
+                <h1>🔒 Password Reset Request</h1>
+            </div>
+            <div class="content">
+                <p>Hello <strong>{user.username}</strong>,</p>
+                <p>
+                    We received a request to reset your password. Click the button below to proceed:
+                </p>
+                <a href="{reset_link}" class="reset-button" target="_blank">Reset Your Password</a>
+                <p>If you did not request a password reset, you can safely ignore this email.</p>
+                <p>For security reasons, this link will expire in 1 hour.</p>
+            </div>
+            <div class="footer">
+                &copy; {datetime.now().year} Golden Hour Photography | All rights reserved.
+            </div>
+        </div>
+    </body>
+    </html>
+    """
 
     try:
         send_email(user.email, subject, body)
@@ -628,8 +703,6 @@ def forgot_password():
         return jsonify({"error": "Failed to send reset email"}), 500
 
     return jsonify({"message": "Password reset link has been sent to your email."}), 200
-
-from flask_jwt_extended import decode_token
 
 @app.post('/reset-password')
 def reset_password():
@@ -714,32 +787,23 @@ class Package(db.Model):
         }
 
 @app.post('/api/packages')
-@cross_origin()  # Allow all origins
 def create_package():
     """
     Create a new package with an image URL.
     """
-    print("DEBUG: Token validated successfully!")
-
-    # Ensure JSON content type
-    if request.content_type != "application/json":
-        print("ERROR: Unsupported Media Type")
-        return jsonify({"error": "Content-Type must be application/json"}), 415
-
-    # Parse incoming JSON data
     data = request.get_json()
     title = data.get("title")
     amount = data.get("amount")
     description = data.get("description")
-    image_url = data.get("image_url", "").strip()  # Use the submitted URL as is
-
-    # Debug input values
-    print(f"DEBUG: Title: {title}, Amount: {amount}, Description: {description}, Image URL: {image_url}")
+    image_url = data.get("image_url", "").strip()
 
     # Validate required fields
     if not title or not amount:
-        print("ERROR: Title and amount are required.")
         return jsonify({"error": "Title and amount are required."}), 400
+
+    # Validate image URL
+    if image_url and not is_valid_url(image_url):
+        return jsonify({"error": "Invalid image URL."}), 400
 
     # Create new package
     try:
@@ -747,18 +811,14 @@ def create_package():
             title=title,
             amount=float(amount),
             description=description,
-            image_url=image_url,  # Save the URL directly
+            image_url=image_url,
         )
         db.session.add(new_package)
         db.session.commit()
-        print(f"DEBUG: Package created with ID: {new_package.id}")
     except Exception as e:
-        print(f"ERROR: Failed to create package - {e}")
         return jsonify({"error": "Failed to create package."}), 500
 
     return jsonify({"message": "Package created successfully!", "package": new_package.to_dict()}), 201
-
-
 @app.put('/api/packages/<int:package_id>')
 def update_package(package_id):
     """
@@ -789,15 +849,17 @@ def delete_package(package_id):
     if not package:
         return jsonify({"error": "Package not found."}), 404
 
-    # Delete associated image
-    if package.image_url and os.path.exists(package.image_url):
-        os.remove(package.image_url)
+    # Only delete local file paths, not external URLs
+    if package.image_url and package.image_url.startswith("uploads/"):
+        if os.path.exists(package.image_url):
+            os.remove(package.image_url)
 
     db.session.delete(package)
     db.session.commit()
 
     return jsonify({"message": "Package deleted successfully!"}), 200
-
+def is_valid_url(url):
+    return re.match(r'^https?://', url) is not None
 @app.get('/api/packages')
 @cross_origin()  # Allow all origins
 def get_packages():
