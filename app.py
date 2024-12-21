@@ -273,14 +273,16 @@ class Review(db.Model):
     rating = db.Column(db.Integer, nullable=False)  # Rating out of 5
     comment = db.Column(db.String(255), nullable=True)
     created_at = db.Column(db.DateTime, default=db.func.now(), nullable=False)
+    is_approved = db.Column(db.Boolean, default=False, nullable=False)  # New field
 
     def to_dict(self):
         return {
             "id": self.id,
-            "photo_url": self.photo_url,  # Return the URL instead of photo_id
+            "photo_url": self.photo_url, 
             "reviewer_name": self.reviewer_name,
             "rating": self.rating,
             "comment": self.comment,
+            "is_approved": self.is_approved, 
             "created_at": self.created_at.strftime("%Y-%m-%d %H:%M:%S")
         }
 
@@ -312,19 +314,61 @@ def add_review():
     db.session.commit()
 
     return jsonify({"message": "Review added successfully!", "review": review.to_dict()}), 201
+
+@app.get('/api/reviews/pending')
+@jwt_required()
+def get_pending_reviews():
+    """
+    Get all reviews that are pending approval.
+    Admin access required.
+    """
+    # Check if the user is an admin (add your logic for admin verification)
+    current_user_id = get_jwt_identity()
+    # Example: Add logic to check if the user is an admin
+    # user = User.query.get(current_user_id)
+    # if not user.is_admin:
+    #     return jsonify({"error": "Admin access required."}), 403
+
+    # Query for pending reviews
+    pending_reviews = Review.query.filter_by(is_approved=False).all()
+
+    return jsonify([review.to_dict() for review in pending_reviews]), 200
+
+
 @app.get('/api/reviews')
 def get_reviews():
     """
-    Get all reviews. Optionally filter by photo_url.
+    Get all approved reviews. Optionally filter by photo_url.
     """
     photo_url = request.args.get("photo_url", None)  # Optional query parameter
 
-    query = Review.query
-    if photo_url:  # Filter reviews by photo_url if provided
+    query = Review.query.filter_by(is_approved=True)  # Only fetch approved reviews
+    if photo_url:
         query = query.filter_by(photo_url=photo_url)
 
     reviews = query.all()
     return jsonify([review.to_dict() for review in reviews]), 200
+@app.patch('/api/reviews/<int:review_id>/approve')
+@jwt_required()  # Admin access only
+def approve_review(review_id):
+    """
+    Approve a specific review by its ID.
+    """
+    # Check user permissions if needed (ensure admin access)
+    current_user_id = get_jwt_identity()
+    # Add logic to confirm if the user is an admin
+
+    # Find the review
+    review = Review.query.get(review_id)
+    if not review:
+        return jsonify({"error": "Review not found."}), 404
+
+    # Approve the review
+    review.is_approved = True
+    db.session.commit()
+
+    return jsonify({"message": "Review approved successfully!", "review": review.to_dict()}), 200
+
 
 @app.delete('/api/reviews/<int:review_id>')
 @jwt_required()
@@ -347,6 +391,42 @@ def delete_review(review_id):
     db.session.commit()
 
     return jsonify({"message": f"Review with ID {review_id} deleted successfully."}), 200
+
+@app.patch('/api/reviews/<int:review_id>')
+@jwt_required()
+def update_review(review_id):
+    """
+    Update specific fields of a review by its ID.
+    Admin access required.
+    """
+    # Check for admin access (add your admin verification logic)
+    current_user_id = get_jwt_identity()
+
+    # Find the review
+    review = Review.query.get(review_id)
+    if not review:
+        return jsonify({"error": "Review not found."}), 404
+
+    data = request.get_json()
+
+    # Update fields if provided
+    if "reviewer_name" in data:
+        review.reviewer_name = data["reviewer_name"]
+    if "rating" in data:
+        if not (1 <= int(data["rating"]) <= 5):
+            return jsonify({"error": "Rating must be between 1 and 5."}), 400
+        review.rating = int(data["rating"])
+    if "comment" in data:
+        review.comment = data["comment"]
+    if "photo_url" in data:
+        review.photo_url = data["photo_url"]
+
+    # Automatically set the review to pending when updated
+    review.is_approved = False
+
+    db.session.commit()
+
+    return jsonify({"message": "Review updated successfully and marked as pending!", "review": review.to_dict()}), 200
 
 #----------------------------------------------------------------------------------------------------
 class Inquiry(db.Model):
