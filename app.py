@@ -35,9 +35,9 @@ def serve_uploads(filename):
 load_dotenv()
 
 # Configuration
-app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///photography.db"  # Change to your database URI
+app.config["SQLALCHEMY_DATABASE_URI"] = os.getenv("DATABASE_URL", "sqlite:///photography.db")
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
-app.config["JWT_SECRET_KEY"] = "supersecretkey"  # Replace with a strong secret key
+app.config["JWT_SECRET_KEY"] = os.getenv("JWT_SECRET_KEY", "fallback_secret_key")
 app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(hours=12)
           
 
