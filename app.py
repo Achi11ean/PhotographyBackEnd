@@ -17,7 +17,10 @@ from dotenv import load_dotenv
 app = Flask(__name__)
 from flask_cors import CORS
 
-CORS(app, supports_credentials=True, resources={r"/*": {"origins": "http://localhost:5173"}})
+CORS(app, supports_credentials=True, resources={r"/*": {"origins": [
+    "http://localhost:5173",
+    "https://jwhitproductionsphotography.netlify.app"
+]}})
 def token_required(f):
     def wrapper(*args, **kwargs):
         if request.path.startswith('/uploads'):
